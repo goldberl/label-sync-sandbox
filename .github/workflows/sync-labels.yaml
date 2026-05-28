@@ -23,7 +23,4 @@ jobs:
       - name: Sync Logic
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          PR_BODY: ${{ github.event.pull_request.body }}
-          ISSUE_NUMBER: ${{ github.event.issue.number }}
-        run: python .github/sync-labels.py
+        run: python .github/sync_labels.py
