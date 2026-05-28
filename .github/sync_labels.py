@@ -11,6 +11,8 @@ LINKED_ISSUE_RE = re.compile(
     r'(?i)(closes|closed|fixes|fixed|resolves|resolved)\s+#(\d+)'
 )
 
+LABEL_ACTIONS = ["labeled", "unlabeled"]
+
 
 def gh(*args, input=None):
     """Run a gh CLI command and return stdout as a string."""
@@ -24,7 +26,7 @@ def gh(*args, input=None):
         text=True,
         input=input,
     )
-    return result.stdout.strip()
+    return json.loads(result.stdout) if result.stdout.strip() else None
 
 
 # From the API docs:
@@ -32,10 +34,14 @@ def gh(*args, input=None):
 # > pull requests and issues, like managing assignees, labels, and milestones,
 # > are handled by the REST API to manage issues.
 # https://docs.github.com/en/rest/pulls/pulls?apiVersion=2026-03-10
-def add_label(repo, number, label):
-    """Add a single label to a PR or issue."""
+def issue_labels(repo, number):
+    return gh("api", "-X", "GET", f"/repos/{repo}/issues/{number}/labels")
+
+
+def add_label(repo, number, *labels):
+    """Add a single label or multiple labels to a PR or issue."""
     gh("api", "-X", "POST", f"/repos/{repo}/issues/{number}/labels",
-       "--input", "-", input=json.dumps({"labels": [label]}))
+       "--input", "-", input=json.dumps({"labels": labels}))
 
 
 def remove_label(repo, number, label):
@@ -49,22 +55,29 @@ def get_linked_pr_numbers(issue_number):
         "pr", "list",
         "--search", f"fixes #{issue_number}",
         "--json", "number",
-        "-q", ".[].number",
     )
-    return pr_list_raw.splitlines() if pr_list_raw else []
+    return [pr["number"] for pr in pr_list_raw]
+
+
+def linked_issue_numbers(pr_body):
+    match = LINKED_ISSUE_RE.search(pr_body)
+    if not match:
+        return []
+    else:
+        return [match.group(2)]
 
 
 def sync_pr_label_to_issue(repo, pr_number, action, label, pr_body):
-    match = LINKED_ISSUE_RE.search(pr_body or "")
-    if not match:
+    issue_nums = linked_issue_numbers(pr_body)
+    if len(issue_nums) <= 0:
         print("No linked issue found in the PR description. Skipping sync.")
         return
 
-    issue_num = match.group(2)
-    if action == "labeled":
-        add_label(repo, issue_num, label)
-    elif action == "unlabeled":
-        remove_label(repo, issue_num, label)
+    for issue_num in issue_nums:
+        if action == "labeled":
+            add_label(repo, issue_num, label)
+        elif action == "unlabeled":
+            remove_label(repo, issue_num, label)
 
 
 def sync_issue_label_to_prs(repo, issue_number, action, label):
@@ -80,30 +93,40 @@ def main(event_name, repo, event):
     print(f"Event: {json.dumps(event)}")
 
     action = event["action"]
-    if action not in ("labeled", "unlabeled"):
-        print(f"Action '{action}' does not require label sync. Skipping.")
-        sys.exit(0)
 
-    label = event["label"]["name"]
-
-    if "pull_request" in event:
+    if action in LABEL_ACTIONS and "pull_request" in event:
         pr = event["pull_request"]
         sync_pr_label_to_issue(
             repo=repo,
             pr_number=pr["number"],
             action=action,
-            label=label,
+            label=event["label"]["name"],
             pr_body=pr.get("body", ""),
         )
 
-    elif "issue" in event:
+    elif action in LABEL_ACTIONS and "issue" in event:
         issue = event["issue"]
         sync_issue_label_to_prs(
             repo=repo,
             issue_number=issue["number"],
             action=action,
-            label=label,
+            label=event["label"]["name"],
         )
+
+    elif action in ["opened", "edited"] and "pull_request" in event:
+        pr = event["pull_request"]
+
+        # Add needs-review to all PRs when opened
+        if action == "opened":
+            add_label(repo, pr["number"], "needs-review")
+
+        issue_nums = linked_issue_numbers(pr.get("body", ""))
+        for issue_num in issue_nums:
+            labels = [
+                label["name"]
+                for label in issue_labels(repo, issue_num)
+            ]
+            add_label(repo, pr["number"], *labels)
 
     else:
         print(f"Unsupported event payload: {event_name}")
