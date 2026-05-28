@@ -101,7 +101,7 @@ def main(event_name, repo, event):
             pr_number=pr["number"],
             action=action,
             label=event["label"]["name"],
-            pr_body=pr.get("body", ""),
+            pr_body=pr.get("body", "") or "",
         )
 
     elif action in LABEL_ACTIONS and "issue" in event:
@@ -120,7 +120,7 @@ def main(event_name, repo, event):
         if action == "opened":
             add_label(repo, pr["number"], "needs-review")
 
-        issue_nums = linked_issue_numbers(pr.get("body", ""))
+        issue_nums = linked_issue_numbers(pr.get("body", "") or "")
         for issue_num in issue_nums:
             labels = [
                 label["name"]
